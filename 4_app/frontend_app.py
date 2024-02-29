@@ -15,7 +15,7 @@ embedding_function = SentenceTransformerEmbeddings(model_name="all-MiniLM-L6-v2"
 
 langchain_chroma = Chroma(
     client=persistent_client,
-    collection_name="collection_name",
+    collection_name=COLLECTION_NAME,
     embedding_function=embedding_function,
 )
 
@@ -51,13 +51,12 @@ def main():
     print("Configuring gradio app")
     
     demo = gradio.Interface(fn=get_responses,
-                            title="Enterprise Custom Knowledge Base Chatbot with Llama2",
-                            description="This AI-powered assistant uses Cloudera DataFlow (NiFi) to scrape a website's sitemap and create a knowledge base. The information it provides as a response is context driven by what is available at the scraped websites. It uses Meta's open-source Llama2 model and the sentence transformer model all-mpnet-base-v2 to evaluate context and form an accurate response from the semantic search. It is fine tuned for questions stemming from topics in its knowledge base, and as such may have limited knowledge outside of this domain. As is always the case with prompt engineering, the better your prompt, the more accurate and specific the response.",
-                            inputs=[gradio.Radio(['llama-2-13b-chat'], label="Select Model", value="llama-2-13b-chat"), gradio.Slider(minimum=0.01, maximum=1.0, step=0.01, value=0.5, label="Select Temperature (Randomness of Response)"), gradio.Radio(["50", "100", "250", "500", "1000"], label="Select Number of Tokens (Length of Response)", value="250"), gradio.Textbox(label="Topic Weight", placeholder="This field can be used to prioritize a topic weight."), gradio.Textbox(label="Question", placeholder="Enter your question here.")],
-                            outputs=[gradio.Textbox(label="Llama2 Model Response"), gradio.Textbox(label="Context Data Source(s)")],
+                            title="Semantic Search with CML and Chroma DB",
+                            description="This services leverages Chroma's vector database to search semantically similar documents to the user's input.",
+                            inputs=[gradio.Slider(minimum=1, maximum=10, step=1, value=3, label="Select number of similar documents to return"), gradio.Radio(["Yes", "No"], label="Show full document extract", value="Yes"), gradio.Textbox(label="Question", placeholder="Enter your search here")],
+                            outputs=[gradio.Textbox(label="Document Response"), gradio.Textbox(label="Data Source(s) and Page Reference")],
                             allow_flagging="never",
                             css=app_css)
-
 
     # Launch gradio app
     print("Launching gradio app")
@@ -69,45 +68,34 @@ def main():
     print("Gradio app ready")
 
 # Helper function for generating responses for the QA app
-def get_responses(engine, temperature, token_count, topic_weight, question):
-    if engine is "" or question is "" or engine is None or question is None:
+def get_responses(num_docs, full_doc_display, question):
+    if num_docs is "" or question is "" or num_docs is None or question is None:
         return "One or more fields have not been specified."
-    if temperature is "" or temperature is None:
-      temperature = 1
-      
-    if topic_weight is "" or topic_weight is None:
-      topic_weight = None
-      
-    if token_count is "" or token_count is None:
-      token_count = 100
     
-    if os.getenv('VECTOR_DB').upper() == "MILVUS":
-        # Load Milvus Vector DB collection
-        vector_db_collection = Collection('cloudera_ml_docs')
-        vector_db_collection.load()
+    if full_doc_display is "" or full_doc_display is None:
+      full_doc_display = "No"
+           
+    if full_doc_display == "Yes":
+        doc_snippet, page, source = query_chroma_vectordb(question, num_docs)
+    if full_doc_display == "No":
+        page, source = query_chroma_vectordb(question, num_docs)
     
-    # Phase 1: Get nearest knowledge base chunk for a user question from a vector db
-    if topic_weight: 
-        vdb_question = "Topic: " + topic_weight + " Question: " + question
-    else:
-        vdb_question = question
+    return response, sources
+
+def query_chroma_vectordb(query, full_doc_display, num_docs):
+    docs = langchain_chroma.similarity_search(query)
+    doc_snippet = []
+    page = []
+    source = []
+    for i in range(1, num_docs + 1):
+        doc_snippet = doc_snippet.append(docs[i].page_content)
+        page = page.append(docs[i].metadata.page)
+        source = source.append(docs[i].metadata.source)
         
-    if os.getenv('VECTOR_DB').upper() == "MILVUS":
-        context_chunk, sources = get_nearest_chunk_from_milvus_vectordb(vector_db_collection, vdb_question)
-        vector_db_collection.release()
+    if full_doc_display == "Yes":
+        return doc_snippet, page, source
+    if full_doc_display == "No":
+        return page, source
         
-    if os.getenv('VECTOR_DB').upper() == "PINECONE":
-        context_chunk, sources, score = get_nearest_chunk_from_pinecone_vectordb(index, vdb_question)
-
-    if engine == "llama-2-13b-chat":
-        # Phase 2a: Perform text generation with LLM model using found kb context chunk
-        response = get_llama2_response_with_context(question, context_chunk, temperature, token_count, topic_weight)
-    
-    if os.getenv('VECTOR_DB').upper() == "PINECONE":
-        return response, sources, score
-    else:
-        return response, sources
-
-
 if __name__ == "__main__":
     main()
