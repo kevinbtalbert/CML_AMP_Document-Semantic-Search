@@ -82,7 +82,7 @@ def query_chroma_vectordb(query, full_doc_display, num_docs):
     source_info = []
     
     # Gather data into lists
-    for i in range(num_docs):
+    for i in range(min(num_docs, len(docs))):
         if full_doc_display == "Yes":
             doc_snippet.append("Doc {}: Relevant content: {}".format(i+1, docs[i].page_content))
         source_info.append("Doc {}: Source link: {}, Page: {}".format(i+1, docs[i].metadata['source'], docs[i].metadata['page']))
